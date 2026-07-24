@@ -1,0 +1,73 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["result", "what_works", "evidence", "changed", "deviations", "discovered", "cost", "next_decision"],
+  "properties": {
+    "result": {
+      "type": "string",
+      "enum": ["done", "partial", "blocked"]
+    },
+    "what_works": {
+      "type": "string",
+      "description": "User-visible outcome in one sentence. Empty string if nothing user-visible changed."
+    },
+    "evidence": {
+      "type": "string",
+      "description": "Command plus key output, at most 3 lines, or a PR/commit reference. Not a narrative."
+    },
+    "changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "lines", "new_deps"],
+      "properties": {
+        "files": { "type": "integer" },
+        "lines": { "type": "integer" },
+        "new_deps": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "deviations": {
+      "type": "string",
+      "description": "Where execution departed from the task brief, and why. 'none' if it did not."
+    },
+    "discovered": {
+      "type": "array",
+      "description": "Every newly discovered issue. Classification is mandatory.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["item", "class", "reproduced"],
+        "properties": {
+          "item": { "type": "string" },
+          "class": {
+            "type": "string",
+            "enum": ["blocker", "follow-up", "out-of-scope"],
+            "description": "blocker requires reproduced=true on the acceptance path; otherwise use follow-up."
+          },
+          "reproduced": {
+            "type": "boolean",
+            "description": "True only if reproduced on the acceptance path during this run."
+          }
+        }
+      }
+    },
+    "cost": {
+      "type": "string",
+      "description": "Turns and wall time, e.g. '12 turns / 8m'."
+    },
+    "next_decision": {
+      "type": "array",
+      "maxItems": 2,
+      "description": "Questions only the decision layer can answer. Empty if none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["question", "options", "recommendation"],
+        "properties": {
+          "question": { "type": "string" },
+          "options": { "type": "array", "items": { "type": "string" } },
+          "recommendation": { "type": "string" }
+        }
+      }
+    }
+  }
+}
