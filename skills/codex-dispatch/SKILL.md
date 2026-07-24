@@ -61,6 +61,15 @@ most, to confirm the process ended.
 Long-running lines: launch with `run_in_background: true` and stop thinking about them. The harness
 re-invokes on exit. Do not poll.
 
+**Do not double-background.** `run_in_background: true` *plus* a trailing `&` kills the Codex child
+when the wrapper's last foreground statement returns — the harness reports exit 0 and no receipt is
+ever written. Use the harness flag alone. For the same reason, never send a dispatch to
+`> /dev/null 2>&1`: a failed line then leaves no trace at all. Pipe to `tail -3` instead, so a
+crash is visible without the transcript entering context.
+
+A missing receipt file is the signal that the line died, not that it is still running. Check the
+receipt path before assuming progress.
+
 ### Flags that matter
 
 - `-s read-only` for recon lines; `-s workspace-write` for build lines.
