@@ -129,17 +129,30 @@ existed. Omitting them is how that recurs.
 Enforced by `receipt.schema.json`, so the shape cannot be negotiated away by the model:
 
 `result` · `what_works` · `evidence` · `changed{files,lines,new_deps}` · `deviations` ·
-`discovered[{item, class, reproduced}]` · `cost` · `next_decision[{question, options, recommendation}]`
+`done_when[{item, status, evidence}]` · `discovered[{item, class, reproduced, instances}]` ·
+`cost` · `next_decision[{question, options, recommendation}]`
 
-Two fields carry the governance load:
+Four fields carry the governance load, each added after a specific receipt failed to surface
+something real:
 
 - `discovered[].class` forces every finding into `blocker` / `follow-up` / `out-of-scope`.
 - `discovered[].reproduced` is required and boolean. **An unreproduced finding cannot be a
   blocker.** This is the review-budget gate, enforced at the schema layer instead of by
   documentation nobody reads.
+- `discovered[].instances` merges repeated occurrences of one root cause into a single entry with
+  a count. Without it, one sandbox permission error was reported as ten separate blockers, which
+  falsely trips the "three or more blockers means scope never froze" tripwire below.
+- `done_when[]` requires one entry per numbered DONE-WHEN item, in order, including unmet ones,
+  each with item-specific evidence. Without it, a receipt claimed three defects repaired when one
+  was misdiagnosed and a required determination was never made. Where an item asked for a
+  judgement, the judgement goes in `evidence` verbatim — not a claim that it was reached.
 
 `next_decision` is capped at 2 and each entry must carry options plus a recommendation, so Claude
 can rule without re-reading the code.
+
+A finding that appears only in a produced document is not reported. Anything substantive written
+into an artifact must also appear in `discovered` — a threat model once recorded a real defect in
+its prose while its receipt showed no findings at all.
 
 ## Concurrency
 

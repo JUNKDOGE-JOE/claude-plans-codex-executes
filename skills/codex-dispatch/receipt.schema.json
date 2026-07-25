@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["result", "what_works", "evidence", "changed", "deviations", "discovered", "cost", "next_decision"],
+  "required": ["result", "what_works", "evidence", "changed", "deviations", "done_when", "discovered", "cost", "next_decision"],
   "properties": {
     "result": {
       "type": "string",
@@ -29,13 +29,30 @@
       "type": "string",
       "description": "Where execution departed from the task brief, and why. 'none' if it did not."
     },
-    "discovered": {
+    "done_when": {
       "type": "array",
-      "description": "Every newly discovered issue. Classification is mandatory.",
+      "description": "One entry per numbered DONE-WHEN item in the task brief, in order. EVERY item must appear, including ones not met. A receipt that omits an item, or reports 'met' without evidence specific to that item, is invalid.",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["item", "class", "reproduced"],
+        "required": ["item", "status", "evidence"],
+        "properties": {
+          "item": { "type": "integer", "description": "The DONE-WHEN number from the brief." },
+          "status": { "type": "string", "enum": ["met", "partial", "unmet"] },
+          "evidence": {
+            "type": "string",
+            "description": "What specifically establishes this status. If the item asked for a determination or a stated choice, put that determination here verbatim - not a claim that it was made."
+          }
+        }
+      }
+    },
+    "discovered": {
+      "type": "array",
+      "description": "Every newly discovered issue. Classification is mandatory. Any substantive finding stated in a produced artifact - a document, a comment, a report - MUST also appear here; a finding is not reported if it only exists in prose.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["item", "class", "reproduced", "instances"],
         "properties": {
           "item": { "type": "string" },
           "class": {
@@ -46,6 +63,11 @@
           "reproduced": {
             "type": "boolean",
             "description": "True only if reproduced on the acceptance path during this run."
+          },
+          "instances": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How many occurrences share this single root cause. Merge repeated occurrences into ONE entry and count them here; do not emit one entry per occurrence."
           }
         }
       }
