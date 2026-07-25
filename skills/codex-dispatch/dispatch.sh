@@ -18,8 +18,11 @@ WORKDIR="$PWD"
 OUT=""
 RESUME=""
 EPHEMERAL=""
+ADD_DIRS=()
 
-while getopts "m:e:s:C:o:R:E" opt; do
+# -a is repeatable: every writable root outside -C needs its own -a, or the line
+# silently cannot write there and only discovers it mid-run.
+while getopts "m:e:s:C:o:R:Ea:" opt; do
   case "$opt" in
     m) MODEL="$OPTARG" ;;
     e) EFFORT="$OPTARG" ;;
@@ -28,7 +31,8 @@ while getopts "m:e:s:C:o:R:E" opt; do
     o) OUT="$OPTARG" ;;
     R) RESUME="$OPTARG" ;;
     E) EPHEMERAL="--ephemeral" ;;
-    *) echo "usage: dispatch.sh -m sol|terra|luna -e low|medium|high|xhigh -s ro|rw -C dir -o receipt.json [-E] \"brief\"" >&2; exit 2 ;;
+    a) ADD_DIRS+=(--add-dir "$OPTARG") ;;
+    *) echo "usage: dispatch.sh -m sol|terra|luna -e low|medium|high|xhigh -s ro|rw -C dir -o receipt.json [-E] [-a extra-writable-dir]... \"brief\"" >&2; exit 2 ;;
   esac
 done
 shift $((OPTIND - 1))
@@ -67,6 +71,7 @@ exec "$CODEX" exec \
   -c approval_policy='"never"' \
   -s "$SANDBOX" \
   -C "$WORKDIR" \
+  ${ADD_DIRS[@]+"${ADD_DIRS[@]}"} \
   $EPHEMERAL \
   --output-schema "$SCHEMA" \
   -o "$OUT" \
