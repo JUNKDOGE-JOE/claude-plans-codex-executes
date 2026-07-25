@@ -81,6 +81,28 @@ receipt path before assuming progress.
   subagent) requires a persisted session.
 - `--add-dir` for extra writable roots; `--skip-git-repo-check` outside a repo.
 
+### Give a build line a clone, not a linked worktree
+
+`git worktree add` puts the new tree's git metadata in the **parent** repo, under
+`.git/worktrees/<name>/`. That is outside a `workspace-write` sandbox rooted at the worktree, so
+Codex can edit files and run tests but **cannot commit** — every run ends `partial` with
+`Unable to create .../index.lock: Operation not permitted`, and the orchestrator has to commit by
+hand. This is structural, not intermittent.
+
+Give any line that must commit an isolated clone instead, where `.git` sits inside its workspace:
+
+```bash
+git clone --shared <repo> /private/tmp/<name> && git -C /private/tmp/<name> checkout -b <branch> origin/main
+```
+
+Then fetch the finished work back:
+
+```bash
+git fetch /private/tmp/<name> <branch>:<branch>
+```
+
+Read-only recon lines can still use linked worktrees — they never write to `.git`.
+
 ## Tier selection: model × effort
 
 Pick the model by task *nature*, not by caution — Codex budget is not a constraint.
