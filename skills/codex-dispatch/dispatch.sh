@@ -59,6 +59,11 @@ fi
 
 mkdir -p "$(dirname "$OUT")"
 
+# Codex refuses to run outside a git repo unless told to. Detect rather than
+# make the caller remember: a scratch workdir is a normal case, not an error.
+SKIP_GIT=""
+git -C "$WORKDIR" rev-parse --git-dir >/dev/null 2>&1 || SKIP_GIT="--skip-git-repo-check"
+
 if [ -n "$RESUME" ]; then
   exec "$CODEX" exec resume "$RESUME" \
     --output-schema "$SCHEMA" -o "$OUT" \
@@ -72,6 +77,7 @@ exec "$CODEX" exec \
   -s "$SANDBOX" \
   -C "$WORKDIR" \
   ${ADD_DIRS[@]+"${ADD_DIRS[@]}"} \
+  $SKIP_GIT \
   $EPHEMERAL \
   --output-schema "$SCHEMA" \
   -o "$OUT" \
