@@ -48,6 +48,19 @@ case "$EFFORT" in
   max)   echo "warn: effort 'max' requires explicit user approval for this run." >&2 ;;
 esac
 
+# Depth guard. The ultra ban stops model-level nesting; it does nothing about a
+# dispatched line that finds this script and dispatches again. Only the decision
+# layer dispatches — an execution line that reaches here is already a child.
+# Recursion here does not just multiply cost: each extra layer is another
+# high-effort reviewer inventing hardening work, which is the exact loop that
+# once produced eleven consecutive hardening commits for one feature.
+if [ -n "${CODEX_DISPATCH_DEPTH:-}" ]; then
+  echo "error: refusing to dispatch from inside a dispatched line (depth=$CODEX_DISPATCH_DEPTH)." >&2
+  echo "       Execution lines do not spawn their own. Report back and let the decision layer split the task." >&2
+  exit 4
+fi
+export CODEX_DISPATCH_DEPTH=1
+
 # Default effort follows the model when not given explicitly.
 if [ -z "$EFFORT" ]; then
   case "$MODEL" in
