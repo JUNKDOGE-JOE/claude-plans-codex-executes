@@ -42,13 +42,20 @@ Claude ──规划 + 拆解──▶ 简报 .codex/brief.md
 - hook 命令用 `$CLAUDE_PROJECT_DIR` 引用脚本，`settings.json` 提交后在任何机器上都能跑（Windows 上已实测展开）。
 - worker 侧技能放 `.agents/skills/`：这是 Codex 文档写明的仓库级位置（从工作目录向上扫到仓库根），0.144 实测 `.codex/skills/` 也能被发现，但 `.codex/` 已经被包装脚本当作草稿目录并整体 gitignore，分开放更干净。
 
+## 为什么角色可配置
+
+- 规划/审查模型 = 这个 Claude Code 会话跑的模型；开发/执行模型 = Codex worker 槽位背后的模型。不同团队、不同预算、不同时期的最优组合不一样，硬编码到 skill 里等于替每个项目做了决定。
+- 所以安装器（或第一次使用时的 Claude）先问两个问题，把答案写进 `.claude/codex-orchestration.json`；wrapper、hook、CLAUDE.md 块都只读这一份，不存在第二个真源。
+- 槽位名 `sol` / `terra` / `luna` 固定、模型可换：命令、worktree 命名、fanout 顺序因此与具体模型解耦，换模型不用改任何提示词。
+- 规划模型只在用户明确选了具体 id 时才写进项目 `.claude/settings.json` 的 `model`（可被 `/model` 覆盖）；选「当前会话」就什么都不锁——保留原来「不锁模型」的默认。
+
 ## 「确保一直照此工作」为什么分层
 
 对话内的嘱咐会被压缩、被遗忘。CLAUDE.md 每个会话重载、hook 每轮必跑、skill 按描述触发——它们活在 harness 层，不随上下文蒸发。
 
 - **L1 项目 `CLAUDE.md` 策略块**：基线倾向。
 - **L2 项目 `.claude/settings.json` 的 `UserPromptSubmit` hook**：强倾向，抗长会话漂移。
-- **不锁模型**：只提醒「你是规划者」，不写 `settings.json` 的 `model` 字段。
+- **默认不锁模型**：只提醒「你是规划者」；只有用户在角色配置里明确选了规划模型，才把它写进项目 `settings.json` 的 `model`（仍可被 `/model` 覆盖）。
 - **不上 L3 硬拦截**（`PreToolUse` deny 源码编辑）：保留为将来升级位。
 
 ## 调用契约要点

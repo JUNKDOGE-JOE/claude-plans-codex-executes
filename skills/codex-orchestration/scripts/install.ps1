@@ -28,6 +28,18 @@
   Leave <project>/CLAUDE.md alone.
 .PARAMETER SkipHook
   Leave the UserPromptSubmit hook entry in <project>/.claude/settings.json alone.
+.PARAMETER PlannerModel
+  Planner model id, or 'current' to follow the active Claude Code session model.
+.PARAMETER PlannerLabel
+  Display label for the planner role.
+.PARAMETER ExecutorModels
+  One to three comma-separated Codex model ids assigned to sol, terra and luna.
+.PARAMETER ExecutorLabel
+  Display label for the executor role.
+.PARAMETER CodexCommand
+  Codex CLI executable or absolute path used by the worker wrapper.
+.PARAMETER Interactive
+  Prompt for planner and executor presets. No prompts occur without this switch.
 
 .EXAMPLE
   cd <your-repo>
@@ -40,7 +52,13 @@ param(
     [string]$Project = (Get-Location).Path,
     [switch]$Uninstall,
     [switch]$SkipClaudeMd,
-    [switch]$SkipHook
+    [switch]$SkipHook,
+    [string]$PlannerModel,
+    [string]$PlannerLabel,
+    [string]$ExecutorModels,
+    [string]$ExecutorLabel,
+    [string]$CodexCommand,
+    [switch]$Interactive
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,6 +86,7 @@ $dst = [ordered]@{
     Wrapper    = Join-Path (Join-Path $claudeDir 'scripts') 'codex-run.ps1'
     Hook       = Join-Path (Join-Path $claudeDir 'hooks') 'codex-reminder.ps1'
     Settings   = Join-Path $claudeDir 'settings.json'
+    Config     = Join-Path $claudeDir 'codex-orchestration.json'
     ClaudeMd   = Join-Path $Project 'CLAUDE.md'
     CodexSkill = Join-Path (Join-Path (Join-Path $Project '.agents') 'skills') 'comment-discipline'
 }
@@ -100,6 +119,109 @@ function Get-Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm S
 
 function Ensure-Directory([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Force -Path $Path | Out-Null }
+}
+
+function New-DefaultRoleConfig {
+    return [pscustomobject][ordered]@{
+        version = 1
+        planner = [pscustomobject][ordered]@{
+            label = 'Claude Code (current session model)'
+            model = $null
+        }
+        executor = [pscustomobject][ordered]@{
+            label = 'Codex GPT-5.6 (Sol / Terra / Luna)'
+            codexCommand = 'codex'
+            workers = [pscustomobject][ordered]@{
+                sol = 'gpt-5.6-sol'
+                terra = 'gpt-5.6-terra'
+                luna = 'gpt-5.6-luna'
+            }
+            defaultWorker = 'sol'
+            fanoutOrder = @('sol', 'terra', 'luna')
+        }
+    }
+}
+
+function Get-PlannerLabel([AllowNull()][string]$Model) {
+    if ([string]::IsNullOrWhiteSpace($Model) -or $Model -eq 'current') { return 'Claude Code (current session model)' }
+    switch ($Model) {
+        'claude-fable-5' { return 'Claude Fable 5' }
+        'claude-opus-5' { return 'Claude Opus 5' }
+        'claude-sonnet-5' { return 'Claude Sonnet 5' }
+        'claude-haiku-4-5-20251001' { return 'Claude Haiku 4.5' }
+        default { return "Claude Code ($Model)" }
+    }
+}
+
+function ConvertTo-ExecutorModels([string]$Value) {
+    $items = @($Value.Split(',', [StringSplitOptions]::None) | ForEach-Object { $_.Trim() })
+    if ($items.Count -lt 1 -or $items.Count -gt 3) {
+        throw '-ExecutorModels requires 1-3 comma-separated model ids.'
+    }
+    if (@($items | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+        throw '-ExecutorModels contains an empty item; provide 1-3 non-empty comma-separated model ids.'
+    }
+    while ($items.Count -lt 3) { $items += $items[-1] }
+    return $items
+}
+
+function Get-ExecutorLabel([string[]]$Models) {
+    if ($Models[0] -ceq 'gpt-5.6-sol' -and $Models[1] -ceq 'gpt-5.6-terra' -and $Models[2] -ceq 'gpt-5.6-luna') {
+        return 'Codex GPT-5.6 (Sol / Terra / Luna)'
+    }
+    if ($Models[0] -ceq $Models[1] -and $Models[1] -ceq $Models[2]) { return "Codex $($Models[0])" }
+    return "Codex ($($Models[0]) / $($Models[1]) / $($Models[2]))"
+}
+
+function Read-RoleConfig {
+    if (-not (Test-Path -LiteralPath $dst.Config)) { return $null }
+    try {
+        $raw = Get-Content -LiteralPath $dst.Config -Raw -Encoding utf8
+        if ([string]::IsNullOrWhiteSpace($raw)) { throw 'file is empty' }
+        $config = $raw | ConvertFrom-Json
+        if (-not $config.planner -or -not $config.executor -or -not $config.executor.workers) { throw 'required role properties are missing' }
+        return $config
+    }
+    catch {
+        throw "Cannot read role config '$($dst.Config)': $($_.Exception.Message)"
+    }
+}
+
+function Write-RoleConfig($Config) {
+    Ensure-Directory (Split-Path -Parent $dst.Config)
+    $content = (ConvertTo-Json -InputObject $Config -Depth 10) + "`n"
+    if (Test-Path -LiteralPath $dst.Config) {
+        $existing = Get-Content -LiteralPath $dst.Config -Raw -Encoding utf8
+        if ($existing -ceq $content) { return $false }
+        Copy-Item -LiteralPath $dst.Config -Destination "$($dst.Config).bak-$stamp"
+        Write-Step "  ~ $($dst.Config) (updated; previous copy kept as .bak-$stamp)"
+    }
+    else { Write-Step "  + $($dst.Config)" }
+    [IO.File]::WriteAllText($dst.Config, $content, $utf8)
+    return $true
+}
+
+function Read-InteractiveRoles {
+    $plannerChoice = Read-Host 'Planner: 1 current session model [default], 2 Claude Fable 5, 3 Claude Opus 5, 4 Claude Sonnet 5, 5 custom id'
+    $interactivePlanner = switch ($plannerChoice) {
+        { [string]::IsNullOrWhiteSpace($_) -or $_ -eq '1' } { 'current'; break }
+        '2' { 'claude-fable-5'; break }
+        '3' { 'claude-opus-5'; break }
+        '4' { 'claude-sonnet-5'; break }
+        '5' { Read-Host 'Planner model id'; break }
+        default { throw "Unknown planner menu choice '$plannerChoice'." }
+    }
+    if ([string]::IsNullOrWhiteSpace($interactivePlanner)) { throw 'Planner model id cannot be empty.' }
+
+    $executorChoice = Read-Host 'Executor: 1 Codex GPT-5.6 Sol/Terra/Luna [default], 2 gpt-5.5 for all slots, 3 gpt-5.4 for all slots, 4 custom comma list'
+    $interactiveExecutor = switch ($executorChoice) {
+        { [string]::IsNullOrWhiteSpace($_) -or $_ -eq '1' } { 'gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna'; break }
+        '2' { 'gpt-5.5'; break }
+        '3' { 'gpt-5.4'; break }
+        '4' { Read-Host 'Executor model ids (1-3, comma-separated)'; break }
+        default { throw "Unknown executor menu choice '$executorChoice'." }
+    }
+    return [pscustomobject]@{ PlannerModel = $interactivePlanner; ExecutorModels = $interactiveExecutor }
 }
 
 function Get-NormalizedPath([string]$Path) {
@@ -183,44 +305,99 @@ function Test-OurHook($Entry) {
     return $false
 }
 
-function Install-Hook {
+function Install-Settings($Config, [AllowNull()]$PreviousPlannerModel, [bool]$ManageHook) {
     $s = Read-Settings
-    if (-not $s.PSObject.Properties['hooks'] -or $null -eq $s.hooks) {
-        $s | Add-Member -Force -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{})
+    $changed = $false
+    $hookAdded = $false
+    if ($ManageHook) {
+        if (-not $s.PSObject.Properties['hooks'] -or $null -eq $s.hooks) {
+            $s | Add-Member -Force -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{})
+        }
+        if (-not $s.hooks.PSObject.Properties['UserPromptSubmit']) {
+            $s.hooks | Add-Member -Force -NotePropertyName UserPromptSubmit -NotePropertyValue @()
+        }
+        $list = @($s.hooks.UserPromptSubmit)
+        if (@($list | Where-Object { Test-OurHook $_ }).Count -eq 0) {
+            $entry = [pscustomobject]@{ hooks = @([pscustomobject]@{ type = 'command'; command = $hookCommand; timeout = 10 }) }
+            $s.hooks.UserPromptSubmit = $list + @($entry)
+            $changed = $true
+            $hookAdded = $true
+        }
     }
-    if (-not $s.hooks.PSObject.Properties['UserPromptSubmit']) {
-        $s.hooks | Add-Member -Force -NotePropertyName UserPromptSubmit -NotePropertyValue @()
+
+    $plannerModel = $Config.planner.model
+    if (-not [string]::IsNullOrWhiteSpace("$plannerModel")) {
+        $canSetModel = -not $s.PSObject.Properties['model'] -or "$($s.model)" -ceq "$plannerModel" -or (
+            -not [string]::IsNullOrWhiteSpace("$PreviousPlannerModel") -and "$($s.model)" -ceq "$PreviousPlannerModel"
+        )
+        if ($canSetModel -and (-not $s.PSObject.Properties['model'] -or "$($s.model)" -cne "$plannerModel")) {
+            $s | Add-Member -Force -NotePropertyName model -NotePropertyValue $plannerModel
+            $changed = $true
+        }
+        elseif (-not $canSetModel) {
+            Write-Step "  ! settings.json: model '$($s.model)' was not set by this installer; left untouched"
+        }
     }
-    $list = @($s.hooks.UserPromptSubmit)
-    if (@($list | Where-Object { Test-OurHook $_ }).Count -gt 0) {
-        Write-Step "  = settings.json: UserPromptSubmit hook already registered"
-        return
+    elseif ($s.PSObject.Properties['model'] -and -not [string]::IsNullOrWhiteSpace("$PreviousPlannerModel") -and "$($s.model)" -ceq "$PreviousPlannerModel") {
+        $s.PSObject.Properties.Remove('model')
+        $changed = $true
     }
-    $entry = [pscustomobject]@{ hooks = @([pscustomobject]@{ type = 'command'; command = $hookCommand; timeout = 10 }) }
-    $s.hooks.UserPromptSubmit = $list + @($entry)
-    Write-Settings $s
-    Write-Step "  + settings.json: UserPromptSubmit hook registered (backup .bak-$stamp)"
+
+    if ($changed) { Write-Settings $s }
+    if ($ManageHook) {
+        if ($hookAdded) { Write-Step "  + settings.json: UserPromptSubmit hook registered (backup .bak-$stamp)" }
+        else { Write-Step "  = settings.json: UserPromptSubmit hook already registered" }
+    }
 }
 
-function Uninstall-Hook {
+function Uninstall-Settings([AllowNull()]$PlannerModel, [bool]$ManageHook) {
     if (-not (Test-Path -LiteralPath $dst.Settings)) { return }
     $s = Read-Settings
-    if (-not $s.PSObject.Properties['hooks'] -or $null -eq $s.hooks -or -not $s.hooks.PSObject.Properties['UserPromptSubmit']) { return }
-    $list = @($s.hooks.UserPromptSubmit)
-    $kept = @($list | Where-Object { -not (Test-OurHook $_) })
-    if ($kept.Count -eq $list.Count) { return }
-    if ($kept.Count -gt 0) { $s.hooks.UserPromptSubmit = $kept } else { $s.hooks.PSObject.Properties.Remove('UserPromptSubmit') }
-    if (@($s.hooks.PSObject.Properties).Count -eq 0) { $s.PSObject.Properties.Remove('hooks') }
-    Write-Settings $s
-    Write-Step "  - settings.json: UserPromptSubmit hook removed (backup .bak-$stamp)"
+    $changed = $false
+    $hookRemoved = $false
+    if ($ManageHook -and $s.PSObject.Properties['hooks'] -and $null -ne $s.hooks -and $s.hooks.PSObject.Properties['UserPromptSubmit']) {
+        $list = @($s.hooks.UserPromptSubmit)
+        $kept = @($list | Where-Object { -not (Test-OurHook $_) })
+        if ($kept.Count -ne $list.Count) {
+            if ($kept.Count -gt 0) { $s.hooks.UserPromptSubmit = $kept } else { $s.hooks.PSObject.Properties.Remove('UserPromptSubmit') }
+            if (@($s.hooks.PSObject.Properties).Count -eq 0) { $s.PSObject.Properties.Remove('hooks') }
+            $changed = $true
+            $hookRemoved = $true
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace("$PlannerModel") -and $s.PSObject.Properties['model'] -and "$($s.model)" -ceq "$PlannerModel") {
+        $s.PSObject.Properties.Remove('model')
+        $changed = $true
+    }
+    if ($changed) { Write-Settings $s }
+    if ($hookRemoved) { Write-Step "  - settings.json: UserPromptSubmit hook removed (backup .bak-$stamp)" }
 }
 
 # --- CLAUDE.md: policy block ---------------------------------------------------------------
 
-function Get-PolicyBlock { (Get-Content -LiteralPath (Join-Path (Join-Path $src 'assets') 'claude-md-block.md') -Raw -Encoding utf8).TrimEnd() }
+function Get-PolicyBlock($Config) {
+    $block = (Get-Content -LiteralPath (Join-Path (Join-Path $src 'assets') 'claude-md-block.md') -Raw -Encoding utf8).TrimEnd()
+    $workerLines = @($Config.executor.fanoutOrder | ForEach-Object {
+        $slot = "$_"
+        "  - ``$slot`` → ``$($Config.executor.workers.$slot)``"
+    }) -join "`n"
+    $fanoutOrder = @($Config.executor.fanoutOrder) -join ' → '
+    $plannerNote = if ([string]::IsNullOrWhiteSpace("$($Config.planner.model)")) {
+        ''
+    }
+    else {
+        "（项目 ``.claude/settings.json`` 已把默认模型设为 ``$($Config.planner.model)``；会话若在跑别的模型，提醒用户一次。）"
+    }
+    return $block.Replace('{{PLANNER_LABEL}}', "$($Config.planner.label)").
+        Replace('{{EXECUTOR_LABEL}}', "$($Config.executor.label)").
+        Replace('{{WORKER_LINES}}', $workerLines).
+        Replace('{{DEFAULT_WORKER}}', "$($Config.executor.defaultWorker)").
+        Replace('{{FANOUT_ORDER}}', $fanoutOrder).
+        Replace('{{PLANNER_MODEL_NOTE}}', $plannerNote)
+}
 
-function Install-ClaudeMd {
-    $block = Get-PolicyBlock
+function Install-ClaudeMd($Config) {
+    $block = Get-PolicyBlock $Config
     $text = if (Test-Path -LiteralPath $dst.ClaudeMd) { Get-Content -LiteralPath $dst.ClaudeMd -Raw -Encoding utf8 } else { '' }
     if ($null -eq $text) { $text = '' }
     if ($text.Contains("`r`n")) { $block = $block -replace "`n", "`r`n" }
@@ -278,6 +455,45 @@ if (-not (Test-Path -LiteralPath (Join-Path $Project '.git'))) {
     Write-Step "  ! $Project has no .git - codex exec needs a git repository (or --skip-git-repo-check); continuing anyway"
 }
 
+$existingRoleConfig = Read-RoleConfig
+$previousPlannerModel = if ($existingRoleConfig) { $existingRoleConfig.planner.model } else { $null }
+$roleConfig = if ($existingRoleConfig) { $existingRoleConfig } else { New-DefaultRoleConfig }
+
+if (-not $Uninstall) {
+    if ($Interactive) {
+        $interactiveRoles = Read-InteractiveRoles
+        if (-not $PSBoundParameters.ContainsKey('PlannerModel')) { $PlannerModel = $interactiveRoles.PlannerModel }
+        if (-not $PSBoundParameters.ContainsKey('ExecutorModels')) { $ExecutorModels = $interactiveRoles.ExecutorModels }
+    }
+
+    $plannerModelProvided = $PSBoundParameters.ContainsKey('PlannerModel') -or ($Interactive -and -not $PSBoundParameters.ContainsKey('PlannerModel'))
+    $executorModelsProvided = $PSBoundParameters.ContainsKey('ExecutorModels') -or ($Interactive -and -not $PSBoundParameters.ContainsKey('ExecutorModels'))
+    if ($plannerModelProvided) {
+        if ([string]::IsNullOrWhiteSpace($PlannerModel)) { throw '-PlannerModel cannot be empty.' }
+        $roleConfig.planner.model = if ($PlannerModel -eq 'current') { $null } else { $PlannerModel }
+        if (-not $PSBoundParameters.ContainsKey('PlannerLabel')) { $roleConfig.planner.label = Get-PlannerLabel $PlannerModel }
+    }
+    if ($PSBoundParameters.ContainsKey('PlannerLabel')) {
+        if ([string]::IsNullOrWhiteSpace($PlannerLabel)) { throw '-PlannerLabel cannot be empty.' }
+        $roleConfig.planner.label = $PlannerLabel
+    }
+    if ($executorModelsProvided) {
+        $models = ConvertTo-ExecutorModels $ExecutorModels
+        $roleConfig.executor.workers.sol = $models[0]
+        $roleConfig.executor.workers.terra = $models[1]
+        $roleConfig.executor.workers.luna = $models[2]
+        if (-not $PSBoundParameters.ContainsKey('ExecutorLabel')) { $roleConfig.executor.label = Get-ExecutorLabel $models }
+    }
+    if ($PSBoundParameters.ContainsKey('ExecutorLabel')) {
+        if ([string]::IsNullOrWhiteSpace($ExecutorLabel)) { throw '-ExecutorLabel cannot be empty.' }
+        $roleConfig.executor.label = $ExecutorLabel
+    }
+    if ($PSBoundParameters.ContainsKey('CodexCommand')) {
+        if ([string]::IsNullOrWhiteSpace($CodexCommand)) { throw '-CodexCommand cannot be empty.' }
+        $roleConfig.executor.codexCommand = $CodexCommand
+    }
+}
+
 if ($Uninstall) {
     Write-Step 'Removing files...'
     if (Test-SamePath $src $dst.Skill) { Write-Step "  ! $($dst.Skill) is the installer's own source; not deleted - remove it by hand if you want it gone" }
@@ -287,28 +503,37 @@ if ($Uninstall) {
     Remove-File $dst.Hook (Join-Path (Join-Path $src 'scripts') 'codex-reminder.ps1')
     Remove-DirectorySafely $dst.CodexSkill; Write-Step "  - $($dst.CodexSkill)"
     Remove-EmptyParents $dst.CodexSkill $Project
-    if (-not $SkipHook) { Uninstall-Hook }
+    Uninstall-Settings $previousPlannerModel (-not $SkipHook)
     if (-not $SkipClaudeMd) { Uninstall-ClaudeMd }
+    if (Test-Path -LiteralPath $dst.Config) {
+        Remove-Item -LiteralPath $dst.Config -Force
+        Write-Step "  - $($dst.Config)"
+    }
     Write-Step 'Done. Start a new Claude Code session in the project to drop the skill, the commands and the reminder hook.'
     exit 0
 }
 
 Write-Step 'Installing files...'
+if (-not $existingRoleConfig -or $plannerModelProvided -or $executorModelsProvided -or $PSBoundParameters.ContainsKey('PlannerLabel') -or $PSBoundParameters.ContainsKey('ExecutorLabel') -or $PSBoundParameters.ContainsKey('CodexCommand')) {
+    Write-RoleConfig $roleConfig | Out-Null
+}
 Install-Directory $src $dst.Skill
 foreach ($f in $commandFiles) { Install-File (Join-Path (Join-Path $src 'commands') $f) (Join-Path $dst.Commands $f) }
 Install-File (Join-Path (Join-Path $src 'scripts') 'codex-run.ps1') $dst.Wrapper
 Install-File (Join-Path (Join-Path $src 'scripts') 'codex-reminder.ps1') $dst.Hook
 Install-Directory (Join-Path (Join-Path $src 'codex-skills') 'comment-discipline') $dst.CodexSkill
-if (-not $SkipHook) { Install-Hook }
-if (-not $SkipClaudeMd) { Install-ClaudeMd }
+Install-Settings $roleConfig $previousPlannerModel (-not $SkipHook)
+if (-not $SkipClaudeMd) { Install-ClaudeMd $roleConfig }
 
-$codexCmd = Get-Command codex -ErrorAction SilentlyContinue
+$configuredCodexCommand = "$($roleConfig.executor.codexCommand)"
+$codexCmd = Get-Command $configuredCodexCommand -ErrorAction SilentlyContinue
 if ($codexCmd) {
-    $v = (& codex --version 2>$null | Select-Object -First 1)
+    $v = (& $configuredCodexCommand --version 2>$null | Select-Object -First 1)
     Write-Step "codex CLI found: $v (model ids gpt-5.6-sol / -luna / -terra need codex-cli >= 0.144)"
 }
 else {
-    Write-Step 'WARNING: `codex` is not on PATH. Install the Codex CLI (npm i -g @openai/codex) and run `codex login` before delegating anything.'
+    Write-Step "WARNING: '$configuredCodexCommand' is not available. Install the Codex CLI (npm i -g @openai/codex), run 'codex login', or update -CodexCommand before delegating anything."
 }
 Write-Step "Done. Start a new Claude Code session in $Project - /codex, /codex-fanout, /codex-flow and the '$skillName' skill are available there."
 Write-Step "Decide whether to commit .claude/, CLAUDE.md and .agents/ or keep them local via .git/info/exclude."
+Write-Step "Roles: planner=$($roleConfig.planner.label); executor=$($roleConfig.executor.label) [sol=$($roleConfig.executor.workers.sol) terra=$($roleConfig.executor.workers.terra) luna=$($roleConfig.executor.workers.luna)]  (change with -PlannerModel / -ExecutorModels or -Interactive)"
