@@ -14,10 +14,10 @@
   outside the workspace. Use -Bypass for full access, or -AddDir to grant extra
   writable directories.
 
-  Driven by Claude Code (Fable) as orchestrator: Fable writes a brief, runs this
+  Driven by Claude Code as orchestrator: Claude writes a brief, runs this
   script, then reviews `git diff` + the result before accepting.
 
-  Workers (rule of this repo: Fable plans -> Sol / Luna / Terra execute -> Fable
+  Workers (rule of this repo: Claude plans -> Sol / Luna / Terra execute -> Claude
   accepts): -Worker sol|luna|terra selects the GPT-5.6 variant gpt-5.6-<worker>.
   Default worker is sol. -Model overrides -Worker when both are given.
   Effort: low|medium|high|xhigh|max|ultra ('ultra' is accepted by Sol/Terra only;
