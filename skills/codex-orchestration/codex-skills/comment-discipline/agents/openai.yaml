@@ -1,0 +1,4 @@
+interface:
+  display_name: "Comment Discipline"
+  short_description: "Keep source-code comments useful, not process residue"
+  default_prompt: "Use $comment-discipline before writing or editing source-code comments."

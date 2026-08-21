@@ -1,5 +1,5 @@
 ---
-name: codex-dispatch
+name: codex-execute
 description: How to execute a dispatched task well in this repository — reading a frozen brief, when to stop and ask, committing incrementally, and returning an honest structured receipt. Use when working from a task brief that specifies GOAL, DONE-WHEN, NON-GOALS and STOP-AND-ASK. This is the execution-layer skill; it does not dispatch anything.
 ---
 
